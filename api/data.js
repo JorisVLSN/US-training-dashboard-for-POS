@@ -42,6 +42,21 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: "Failed to reach Jira API", detail: err.message });
   }
 
+  // Diagnostics: who the token belongs to and what Jira returned (visit /api/data?debug=1)
+  let debug;
+  if (req.query?.debug) {
+    try {
+      const me = await (await fetch(`${JIRA_BASE}/rest/api/3/myself`, { headers: { Authorization: `Basic ${auth}`, Accept: "application/json" } })).json();
+      const perProject = {};
+      for (const p of PLAYERS) {
+        const r = await fetch(`${JIRA_BASE}/rest/api/3/search/jql?jql=${encodeURIComponent(`project = ${p.project}`)}&fields=key&maxResults=1`, { headers: { Authorization: `Basic ${auth}`, Accept: "application/json" } });
+        const j = await r.json().catch(() => ({}));
+        perProject[p.project] = { http: r.status, returned: (j.issues || []).length, errors: j.errorMessages, warnings: j.warningMessages };
+      }
+      debug = { tokenUser: me.displayName || me.emailAddress || me.errorMessages, accountId: me.accountId, mainQuery: { returned: (jiraResp.issues || []).length, warnings: jiraResp.warningMessages, errors: jiraResp.errorMessages }, perProject };
+    } catch (e) { debug = { error: e.message }; }
+  }
+
   // Bucket issues by project
   const byProject = {};
   for (const p of PLAYERS) byProject[p.project] = [];
@@ -117,5 +132,6 @@ export default async function handler(req, res) {
     },
     players,
     lastUpdated: new Date().toISOString(),
+    ...(debug ? { debug } : {}),
   });
 }
