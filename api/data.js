@@ -4,8 +4,8 @@ const JIRA_BASE = "https://mews.atlassian.net";
 const PROGRAM_START = "2026-10-15";
 
 const PLAYERS = [
-  { project: "POTA", name: "POTA", color: "#38bdf8", jiraUrl: `${JIRA_BASE}/jira/core/projects/POTA/board` },
-  { project: "POTM", name: "POTM", color: "#f472b6", jiraUrl: `${JIRA_BASE}/jira/core/projects/POTM/board` },
+  { project: "POTA", name: "AJ", color: "#38bdf8", jiraUrl: `${JIRA_BASE}/jira/core/projects/POTA/board` },
+  { project: "POTM", name: "Miguel", color: "#f472b6", jiraUrl: `${JIRA_BASE}/jira/core/projects/POTM/board` },
 ];
 
 export default async function handler(req, res) {
@@ -22,6 +22,16 @@ export default async function handler(req, res) {
   const auth = Buffer.from(`${email}:${token}`).toString("base64");
   const jql  = encodeURIComponent("project IN (POTA, POTM) ORDER BY project ASC, created ASC");
   const url  = `${JIRA_BASE}/rest/api/3/search/jql?jql=${jql}&fields=summary,status&maxResults=200`;
+
+  // Jira answers an invalid token with HTTP 200 and an empty issue list, so verify the credentials first
+  try {
+    const me = await fetch(`${JIRA_BASE}/rest/api/3/myself`, { headers: { Authorization: `Basic ${auth}`, Accept: "application/json" } });
+    if (!me.ok) {
+      return res.status(401).json({ error: `Jira rejected JIRA_EMAIL / JIRA_TOKEN (HTTP ${me.status}). Create a new unscoped API token and redeploy.` });
+    }
+  } catch (err) {
+    return res.status(500).json({ error: "Failed to reach Jira API", detail: err.message });
+  }
 
   let jiraResp;
   try {
@@ -40,21 +50,6 @@ export default async function handler(req, res) {
     jiraResp = await response.json();
   } catch (err) {
     return res.status(500).json({ error: "Failed to reach Jira API", detail: err.message });
-  }
-
-  // Diagnostics: who the token belongs to and what Jira returned (visit /api/data?debug=1)
-  let debug;
-  if (req.query?.debug) {
-    try {
-      const me = await (await fetch(`${JIRA_BASE}/rest/api/3/myself`, { headers: { Authorization: `Basic ${auth}`, Accept: "application/json" } })).json();
-      const perProject = {};
-      for (const p of PLAYERS) {
-        const r = await fetch(`${JIRA_BASE}/rest/api/3/search/jql?jql=${encodeURIComponent(`project = ${p.project}`)}&fields=key&maxResults=1`, { headers: { Authorization: `Basic ${auth}`, Accept: "application/json" } });
-        const j = await r.json().catch(() => ({}));
-        perProject[p.project] = { http: r.status, returned: (j.issues || []).length, errors: j.errorMessages, warnings: j.warningMessages };
-      }
-      debug = { tokenUser: me.displayName || me.emailAddress || me.errorMessages, accountId: me.accountId, mainQuery: { returned: (jiraResp.issues || []).length, warnings: jiraResp.warningMessages, errors: jiraResp.errorMessages }, perProject };
-    } catch (e) { debug = { error: e.message }; }
   }
 
   // Bucket issues by project
@@ -132,6 +127,5 @@ export default async function handler(req, res) {
     },
     players,
     lastUpdated: new Date().toISOString(),
-    ...(debug ? { debug } : {}),
   });
 }
